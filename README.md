@@ -45,7 +45,7 @@
 
 1. 当 push 或 pull request 涉及 actor-mapping.xml 时，工作流会自动触发。
 2. pull request 场景执行严格校验：
-  - 对 <actor></actor> 内的 <a ... /> 条目进行 natural 排序。
+  - 对 actor 内的条目进行 natural 排序。
   - 统一属性顺序为 zh_cn、zh_tw、jp、keyword、tmdb_id（其他属性按名称追加）。
   - 检查并清理多余转译字符串（例如重复实体转义、数字实体转义、可疑反斜杠转义串）。
 3. push 场景自动执行格式化，并在 actor-mapping.xml 有变更时自动提交回当前分支。
