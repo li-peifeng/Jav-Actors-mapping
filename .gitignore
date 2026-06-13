@@ -7,5 +7,4 @@ __pycache__
 *.log
 *.env
 *.DS_Store
-scripts
 *.json
