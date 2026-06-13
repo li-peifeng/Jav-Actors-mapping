@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from functools import lru_cache
 import html
+import json
 import re
 import sys
 from pathlib import Path
@@ -59,6 +60,11 @@ def parse_args() -> argparse.Namespace:
         "--write",
         action="store_true",
         help="Write normalized XML content back to file.",
+    )
+    parser.add_argument(
+        "--adult-person-ids",
+        default=None,
+        help="Path to adult_person_ids.json for tmdb_id synchronization.",
     )
     return parser.parse_args()
 
@@ -206,6 +212,65 @@ def render_entry(attributes: Dict[str, str]) -> str:
     return f"  <a {' '.join(parts)} />"
 
 
+def load_person_ids(file_path: Path) -> List[Dict[str, str]]:
+    people: List[Dict[str, str]] = []
+    with file_path.open(encoding="utf-8") as file:
+        for raw_line in file:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSON line in {file_path}: {exc}") from exc
+            name = record.get("name")
+            person_id = record.get("id")
+            if name is None or person_id is None:
+                continue
+            people.append({"name": str(name).strip(), "id": str(person_id)})
+    return people
+
+
+def split_keyword_values(keyword_value: str) -> List[str]:
+    return [value.strip() for value in keyword_value.split(",") if value.strip()]
+
+
+def merge_person_ids(root: ET.Element, person_ids: List[Dict[str, str]]) -> List[Tuple[str, str, str, str]]:
+    exact_index: Dict[str, ET.Element] = {}
+    keyword_index: Dict[str, ET.Element] = {}
+
+    for child in list(root):
+        if child.tag != "a":
+            continue
+        for field in ("zh_cn", "zh_tw", "jp"):
+            field_value = child.attrib.get(field, "").strip()
+            if field_value:
+                exact_index.setdefault(field_value, child)
+        keywords = split_keyword_values(child.attrib.get("keyword", ""))
+        for keyword in keywords:
+            keyword_index.setdefault(keyword, child)
+
+    changes: List[Tuple[str, str, str, str]] = []
+    for person in person_ids:
+        name = person["name"]
+        person_id = person["id"]
+        entry = exact_index.get(name)
+        match_kind = "exact"
+        if entry is None:
+            entry = keyword_index.get(name)
+            match_kind = "keyword" if entry is not None else "none"
+
+        if entry is None:
+            continue
+
+        current_tmdb = entry.attrib.get("tmdb_id", "").strip()
+        if current_tmdb != person_id:
+            entry.attrib["tmdb_id"] = person_id
+            changes.append((name, current_tmdb, person_id, match_kind))
+
+    return changes
+
+
 def sort_key_for_entry(attributes: Dict[str, str], rendered_line: str) -> SortKey:
     return (
         (script_bucket_for_text(attributes.get("zh_cn", "")), natural_key(attributes.get("zh_cn", ""))),
@@ -217,7 +282,7 @@ def sort_key_for_entry(attributes: Dict[str, str], rendered_line: str) -> SortKe
     )
 
 
-def build_normalized_xml(raw_xml: str) -> str:
+def build_normalized_xml(raw_xml: str, person_ids: List[Dict[str, str]] | None = None) -> str:
     try:
         root = ET.fromstring(raw_xml)
     except ET.ParseError as exc:
@@ -225,6 +290,9 @@ def build_normalized_xml(raw_xml: str) -> str:
 
     if root.tag != "actor":
         raise ValueError(f"Root element must be <actor>, got <{root.tag}>.")
+
+    if person_ids is not None:
+        merge_person_ids(root, person_ids)
 
     rendered_entries: List[Tuple[SortKey, str]] = []
 
@@ -278,8 +346,20 @@ def main() -> int:
     original_text = xml_path.read_text(encoding="utf-8")
     normalized_original = normalize_newlines(original_text)
 
+    person_ids: List[Dict[str, str]] | None = None
+    if args.adult_person_ids:
+        person_ids_path = Path(args.adult_person_ids)
+        if not person_ids_path.exists():
+            print(f"Person ID file not found: {person_ids_path}")
+            return 1
+        try:
+            person_ids = load_person_ids(person_ids_path)
+        except ValueError as exc:
+            print(str(exc))
+            return 1
+
     try:
-        normalized_xml = build_normalized_xml(normalized_original)
+        normalized_xml = build_normalized_xml(normalized_original, person_ids)
     except ValueError as exc:
         print(str(exc))
         return 1
