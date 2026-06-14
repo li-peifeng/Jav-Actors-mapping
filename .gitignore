@@ -1,0 +1,10 @@
+.cache
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.env
+*.DS_Store
+*.json
